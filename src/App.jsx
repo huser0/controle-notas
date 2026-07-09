@@ -176,12 +176,19 @@ for (let i = 0; i < headers.length; i++) {
     valorPago = Math.round((valorTotal - desconto) * 100) / 100;
   }
 
+  // A maioria das NFC-e traz "Qtd. total de itens" no rodapé — usamos isso para
+  // avisar quando o OCR reconheceu menos (ou mais) itens do que a nota realmente tem,
+  // o que costuma acontecer com PDFs de baixa qualidade (ex.: "Imprimir em PDF" do Safari).
+  const qtdItensMatch = text.match(/Qtd\.?\s*total\s*de\s*itens\s*:?\s*(\d+)/i);
+  const qtdItensEsperada = qtdItensMatch ? parseInt(qtdItensMatch[1], 10) : null;
+
   return {
     items,
     date: isoDate,
     valorTotal,
     desconto,
     valorPago,
+    qtdItensEsperada,
   };
 }
 
@@ -229,7 +236,7 @@ async function ensureTesseract() {
   }
 }
 
-async function pdfToCanvases(file, scale = 2.2) {
+async function pdfToCanvases(file, scale = 3) {
   const buf = await file.arrayBuffer();
   const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
   const canvases = [];
@@ -246,6 +253,39 @@ async function pdfToCanvases(file, scale = 2.2) {
   return canvases;
 }
 
+// PDFs gerados por "Imprimir em PDF" (comum no Safari/iOS) costumam sair com
+// contraste mais baixo e texto levemente borrado, o que atrapalha o OCR.
+// Aqui convertemos para escala de cinza e esticamos o contraste (o pixel mais
+// escuro vira preto, o mais claro vira branco), o que ajuda o Tesseract a
+// distinguir melhor as letras nesses PDFs de qualidade inferior.
+function preprocessCanvasForOcr(sourceCanvas) {
+  const w = sourceCanvas.width;
+  const h = sourceCanvas.height;
+  const out = document.createElement("canvas");
+  out.width = w;
+  out.height = h;
+  const ctx = out.getContext("2d");
+  ctx.drawImage(sourceCanvas, 0, 0);
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const d = imgData.data;
+
+  let min = 255;
+  let max = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    d[i] = d[i + 1] = d[i + 2] = gray;
+    if (gray < min) min = gray;
+    if (gray > max) max = gray;
+  }
+  const range = Math.max(max - min, 1);
+  for (let i = 0; i < d.length; i += 4) {
+    const v = ((d[i] - min) / range) * 255;
+    d[i] = d[i + 1] = d[i + 2] = v;
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return out;
+}
+
 async function ocrCanvases(canvases, onProgress) {
   await ensureTesseract();
   const worker = await window.Tesseract.createWorker("por", 1, {
@@ -255,7 +295,8 @@ async function ocrCanvases(canvases, onProgress) {
   });
   let fullText = "";
   for (const canvas of canvases) {
-    const { data } = await worker.recognize(canvas);
+    const procCanvas = preprocessCanvasForOcr(canvas);
+    const { data } = await worker.recognize(procCanvas);
     fullText += (data?.text || "") + "\n";
   }
   await worker.terminate();
@@ -726,6 +767,8 @@ function AddTab({ onSave, onDone }) {
       if (lj) setLoja(lj);
       if (!r.items.length) {
         setPdfError("Não consegui reconhecer os itens automaticamente. O texto lido apareceu no campo abaixo — confira e ajuste antes de continuar (ou adicione os itens manualmente).");
+      } else if (r.qtdItensEsperada && r.qtdItensEsperada !== r.items.length) {
+        setPdfError(`A nota indica ${r.qtdItensEsperada} itens, mas só reconheci ${r.items.length}. Isso é comum quando o PDF vem de um "Imprimir em PDF" do celular (qualidade mais baixa) — confira o texto lido abaixo e complete os itens que faltarem manualmente.`);
       }
       setPdfStatus("");
     } catch (err) {
@@ -781,6 +824,10 @@ function AddTab({ onSave, onDone }) {
           <p className="disp" style={{ fontSize: 16, fontWeight: 700, margin: "0 0 4px" }}>Enviar PDF da nota</p>
           <p style={{ fontSize: 12.5, color: INK_SOFT, margin: "0 0 12px" }}>
             Envie o PDF baixado da consulta da NFC-e. Como esse PDF costuma ser uma imagem da página (sem texto selecionável), o app lê o conteúdo por OCR direto no seu navegador — pode levar alguns segundos.
+          </p>
+          <p style={{ fontSize: 11.5, color: INK_SOFT, background: PAPER_DARK, border: `1px solid ${LINE}`, borderRadius: 6, padding: "8px 10px", margin: "0 0 12px", display: "flex", gap: 6, alignItems: "flex-start" }}>
+            <AlertCircle size={12} style={{ marginTop: 2, flexShrink: 0, color: GOLD }} />
+            Dica: no iPhone, o "Imprimir → Salvar em PDF" do Safari costuma gerar um PDF de qualidade mais baixa que o do PC, o que atrapalha o OCR. Se possível, use o botão de baixar/compartilhar PDF da própria página da NFC-e (quando existir), ou copie o texto da página no Safari e cole no campo abaixo em vez de enviar o PDF.
           </p>
           <input
             ref={fileInputRef}
@@ -854,7 +901,12 @@ function AddTab({ onSave, onDone }) {
           {parsed && parsed.items.length === 0 && (
             <p style={{ fontSize: 12, color: RED, marginTop: 8 }}>Não consegui reconhecer itens nesse texto — adicione manualmente abaixo.</p>
           )}
-          {parsed && parsed.items.length > 0 && (
+          {parsed && parsed.items.length > 0 && parsed.qtdItensEsperada && parsed.qtdItensEsperada !== parsed.items.length && (
+            <p style={{ fontSize: 12, color: GOLD, marginTop: 8, display: "flex", alignItems: "flex-start", gap: 5 }}>
+              <AlertCircle size={13} style={{ marginTop: 1, flexShrink: 0 }} /> A nota indica {parsed.qtdItensEsperada} itens, mas só reconheci {parsed.items.length} — confira o texto e complete manualmente os que faltarem.
+            </p>
+          )}
+          {parsed && parsed.items.length > 0 && (!parsed.qtdItensEsperada || parsed.qtdItensEsperada === parsed.items.length) && (
             <p style={{ fontSize: 12, color: GREEN, marginTop: 8, display: "flex", alignItems: "center", gap: 5 }}>
               <Check size={13} /> {parsed.items.length} itens reconhecidos
             </p>
