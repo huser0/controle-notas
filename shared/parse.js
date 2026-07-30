@@ -36,29 +36,44 @@ export function parseReceiptText(text) {
   const items = [];
   const norm = String(text || "").replace(/\r/g, "");
 
-  // Incluído Qtd total de itens no rodapé para garantir que o corte seja perfeito
-  const footerMatch = norm.match(
-    /Emiss[aã]o:|Valor\s*total\s*R\$|Descontos\s*R\$|Valor\s*a\s*pagar\s*R\$|Forma\s*de\s*pagamento|Chave\s*de\s*acesso|Tributos\s*totais|Qtd\.?\s*total\s*de\s*itens/i
-  );
-  const itemsText = footerMatch ? norm.slice(0, footerMatch.index) : norm;
-
-// Modificado: Captura a linha inteira que possui o padrão do Código, independente de parênteses.
+  // Captura a linha inteira que possui o padrão do Código, independente de parênteses.
   // Isso impede que a regex "pule" para as linhas de valores debaixo.
+  //
+  // Os cabeçalhos são localizados no texto INTEIRO, antes de qualquer corte de
+  // rodapé: numa nota de várias páginas o rodapé se repete no meio do documento
+  // (cada página traz "Valor total R$" / "Qtd. total de itens"), e cortar na
+  // primeira ocorrência descartava silenciosamente todos os itens seguintes.
   const headerRegex = /^([^\n(]+?)\s*(?:\(\s*)?C[oó]digo:\s*(\d+)[^\n]*/gim;
-  const headers = [];
+  const todosHeaders = [];
   let hm;
 
-  while ((hm = headerRegex.exec(itemsText)) !== null) {
+  while ((hm = headerRegex.exec(norm)) !== null) {
     // O cabeçalho termina exatamente onde a linha atual termina, eliminando o risco de engolir os valores abaixo
-    const headerEndPos = headerRegex.lastIndex;
-
-    headers.push({
+    todosHeaders.push({
       name: hm[1].trim(),
       code: hm[2].trim(),
       start: hm.index,
-      headerEnd: headerEndPos
+      headerEnd: headerRegex.lastIndex
     });
   }
+
+  // O rodapé que vale é o primeiro que aparece DEPOIS do último produto.
+  const ultimoHeaderFim = todosHeaders.length
+    ? todosHeaders[todosHeaders.length - 1].headerEnd
+    : 0;
+  const footerRegex =
+    /Emiss[aã]o:|Valor\s*total\s*R\$|Descontos\s*R\$|Valor\s*a\s*pagar\s*R\$|Forma\s*de\s*pagamento|Chave\s*de\s*acesso|Tributos\s*totais|Qtd\.?\s*total\s*de\s*itens/gi;
+  let corte = norm.length;
+  let fm;
+  while ((fm = footerRegex.exec(norm)) !== null) {
+    if (fm.index >= ultimoHeaderFim) {
+      corte = fm.index;
+      break;
+    }
+  }
+
+  const itemsText = norm.slice(0, corte);
+  const headers = todosHeaders.filter((h) => h.start < corte);
 
 // ... dentro de parseReceiptText, substitua o bloco do laço for por este:
 
@@ -157,6 +172,11 @@ for (let i = 0; i < headers.length; i++) {
     desconto,
     valorPago,
     qtdItensEsperada,
+    // Diagnóstico: separa "o OCR não leu o produto" de "leu o produto mas não
+    // conseguiu ler quantidade/preço". Sem isso, um item cujo bloco de valores
+    // não casa some sem deixar rastro, e não dá para saber onde atacar.
+    headersEncontrados: headers.length,
+    itensDescartados: headers.length - items.length,
   };
 }
 

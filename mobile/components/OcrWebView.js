@@ -33,7 +33,8 @@ const OcrWebView = forwardRef(function OcrWebView(
       } catch {
         return;
       }
-      if (msg.type === "status") onStatus?.(msg.status);
+      // A mensagem inteira vai junto: em PDF ela traz page/pages para o progresso.
+      if (msg.type === "status") onStatus?.(msg.status, msg);
       else if (msg.type === "progress") onProgress?.(msg.progress);
       else if (msg.type === "result") onResult?.(msg.text);
       else if (msg.type === "error") onError?.(msg.message);

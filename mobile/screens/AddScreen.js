@@ -4,10 +4,11 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
-import { ScanLine, Check, X, Plus, AlertCircle, FileUp, Camera } from "lucide-react-native";
+import { ScanLine, Check, X, Plus, AlertCircle, FileUp, Camera, RefreshCw } from "lucide-react-native";
 import TornCard from "../components/TornCard";
 import OcrWebView from "../components/OcrWebView";
 import { parseReceiptText, extractLoja, toNumber } from "shared/parse";
+import { PDF_SCALE_ALTA } from "../lib/ocrHtml";
 import { fmtBRL, fmtDateBR, todayISO } from "shared/format";
 import { INK, INK_SOFT, LINE, RED, GOLD, PAPER, PAPER_DARK, FIELD } from "../theme";
 import * as theme from "../theme";
@@ -28,8 +29,14 @@ export default function AddScreen({ onSave, onDone }) {
   const [ocrStatus, setOcrStatus] = useState("");
   const [ocrProgress, setOcrProgress] = useState(0);
   const [ocrError, setOcrError] = useState("");
+  const [ocrPage, setOcrPage] = useState(null);
+  // Guarda a última leitura para o "tentar de novo" não exigir reescolher o arquivo.
+  const ultimaLeitura = useRef(null);
+  // { esperado, lidos, headers, descartados } quando a contagem não bate
+  const [divergencia, setDivergencia] = useState(null);
+  const [divergenciaAceita, setDivergenciaAceita] = useState(false);
 
-  // Miolo comum aos três caminhos de entrada: colar texto, PDF e foto.
+  // Miolo comum aos três caminhos de entrada: colar texto, PDF e foto do cupom.
   const applyParsedText = useCallback((text, { fromOcr = false } = {}) => {
     const r = parseReceiptText(text);
     if (r.date) setDate(r.date);
@@ -38,15 +45,24 @@ export default function AddScreen({ onSave, onDone }) {
     const lj = extractLoja(text);
     if (lj) setLoja(lj);
 
+    const bate = !r.qtdItensEsperada || r.qtdItensEsperada === r.items.length;
+    setDivergencia(
+      bate
+        ? null
+        : {
+            esperado: r.qtdItensEsperada,
+            lidos: r.items.length,
+            headers: r.headersEncontrados,
+            descartados: r.itensDescartados,
+          }
+    );
+    setDivergenciaAceita(false);
+
     if (!r.items.length) {
       setParseWarning(
         fromOcr
           ? "Não consegui reconhecer os itens automaticamente. O texto lido apareceu no campo abaixo — confira e ajuste, ou lance os itens manualmente."
           : "Não consegui reconhecer nenhum item nesse texto. Confira o formato ou lance os itens manualmente abaixo."
-      );
-    } else if (r.qtdItensEsperada && r.qtdItensEsperada !== r.items.length) {
-      setParseWarning(
-        `A nota indica ${r.qtdItensEsperada} itens, mas reconheci ${r.items.length}. Complete os que faltarem manualmente.`
       );
     } else {
       setParseWarning("");
@@ -59,10 +75,18 @@ export default function AddScreen({ onSave, onDone }) {
     ocrStatus === "carregando" || ocrStatus === "renderizando" || ocrStatus === "lendo";
 
   const startOcr = (payload) => {
+    ultimaLeitura.current = payload;
     setOcrError("");
     setOcrProgress(0);
+    setOcrPage(null);
     setOcrStatus("carregando");
     ocrRef.current?.runOcr(payload);
+  };
+
+  const tentarNovamenteEmAlta = () => {
+    const anterior = ultimaLeitura.current;
+    if (!anterior) return;
+    startOcr({ ...anterior, scale: PDF_SCALE_ALTA });
   };
 
   const pickPdf = async () => {
@@ -100,28 +124,32 @@ export default function AddScreen({ onSave, onDone }) {
 
   const handleOcrResult = useCallback(
     (text) => {
-      setRaw(text);
-      applyParsedText(text, { fromOcr: true });
       setOcrStatus("");
       setOcrProgress(0);
+      setOcrPage(null);
+
+      setRaw(text);
+      applyParsedText(text, { fromOcr: true });
     },
     [applyParsedText]
   );
 
   const handleOcrError = useCallback((message) => {
     setOcrStatus("");
+    setOcrPage(null);
     setOcrError(
-      `Não foi possível ler a nota. Verifique sua conexão — o leitor de PDF/OCR é baixado da internet na primeira vez. (${message})`
+      `Não foi possível ler. Verifique sua conexão — o leitor de PDF/OCR é baixado da internet na primeira vez. (${message})`
     );
   }, []);
 
+  const paginaSufixo = ocrPage ? ` (página ${ocrPage.page} de ${ocrPage.pages})` : "";
   const ocrLabel =
     ocrStatus === "carregando"
       ? "Preparando leitor..."
       : ocrStatus === "renderizando"
-        ? "Abrindo arquivo..."
+        ? `Abrindo arquivo...${paginaSufixo}`
         : ocrStatus === "lendo"
-          ? `Lendo nota (OCR)... ${Math.round(ocrProgress * 100)}%`
+          ? `Lendo (OCR)... ${Math.round(ocrProgress * 100)}%${paginaSufixo}`
           : "";
 
   const removeItem = (i) => setManualItems((arr) => arr.filter((_, idx) => idx !== i));
@@ -140,6 +168,10 @@ export default function AddScreen({ onSave, onDone }) {
   const subtotal = manualItems.reduce((s, i) => s + i.total, 0);
   const descontoNum = toNumber(desconto);
   const total = Math.max(subtotal - descontoNum, 0);
+
+  // Divergência de contagem trava o Guardar até o usuário reprocessar ou aceitar,
+  // para não salvar uma nota pela metade sem perceber.
+  const podeGuardar = manualItems.length > 0 && (!divergencia || divergenciaAceita);
 
   const handleSave = async () => {
     if (!manualItems.length) return;
@@ -160,6 +192,10 @@ export default function AddScreen({ onSave, onDone }) {
       setDate("");
       setDesconto("");
       setParseWarning("");
+      setDivergencia(null);
+      setDivergenciaAceita(false);
+      setOcrError("");
+      ultimaLeitura.current = null;
       onDone();
     }
   };
@@ -181,7 +217,11 @@ export default function AddScreen({ onSave, onDone }) {
     <View style={{ gap: 18 }}>
       <OcrWebView
         ref={ocrRef}
-        onStatus={(s) => s !== "pronto" && setOcrStatus(s)}
+        onStatus={(s, msg) => {
+          if (s === "pronto") return;
+          setOcrStatus(s);
+          if (msg?.pages) setOcrPage({ page: msg.page, pages: msg.pages });
+        }}
         onProgress={setOcrProgress}
         onResult={handleOcrResult}
         onError={handleOcrError}
@@ -243,6 +283,7 @@ export default function AddScreen({ onSave, onDone }) {
             </Pressable>
           </View>
 
+
           {ocrBusy && (
             <View style={{ marginTop: 12 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -275,6 +316,77 @@ export default function AddScreen({ onSave, onDone }) {
             <View style={{ flexDirection: "row", gap: 6, marginTop: 10 }}>
               <AlertCircle size={13} color={RED} style={{ marginTop: 1 }} />
               <Text style={{ fontSize: 12, color: RED, flexShrink: 1 }}>{ocrError}</Text>
+            </View>
+          )}
+
+          {!!divergencia && !ocrBusy && (
+            <View
+              style={{
+                marginTop: 12,
+                borderWidth: 1,
+                borderColor: RED,
+                backgroundColor: "#F6E4E1",
+                borderRadius: 8,
+                padding: 12,
+              }}
+            >
+              <View style={{ flexDirection: "row", gap: 6, alignItems: "flex-start" }}>
+                <AlertCircle size={14} color={RED} style={{ marginTop: 1 }} />
+                <Text style={{ fontSize: 13, color: RED, fontWeight: "700", flexShrink: 1 }}>
+                  A nota indica {divergencia.esperado} itens, mas reconheci {divergencia.lidos}.
+                </Text>
+              </View>
+
+              {/* Diagnóstico: separa "não leu o produto" de "leu mas não leu o preço" */}
+              <Text style={{ fontSize: 11.5, color: INK_SOFT, marginTop: 6 }}>
+                {divergencia.descartados > 0
+                  ? `Encontrei ${divergencia.headers} produtos no texto, mas em ${divergencia.descartados} deles não consegui ler quantidade/preço.`
+                  : `Só encontrei ${divergencia.headers} produtos no texto lido — os outros não foram reconhecidos na imagem.`}
+              </Text>
+
+              <View style={{ flexDirection: "row", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                {ultimaLeitura.current?.kind === "pdf" && (
+                  <Pressable
+                    onPress={tentarNovamenteEmAlta}
+                    style={{
+                      flexGrow: 1,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 6,
+                      backgroundColor: INK,
+                      borderRadius: 7,
+                      paddingVertical: 10,
+                      paddingHorizontal: 12,
+                    }}
+                  >
+                    <RefreshCw size={14} color={PAPER} />
+                    <Text style={{ color: PAPER, fontSize: 12.5, fontWeight: "700" }}>
+                      Tentar de novo em alta qualidade
+                    </Text>
+                  </Pressable>
+                )}
+                <Pressable
+                  onPress={() => setDivergenciaAceita(true)}
+                  style={{
+                    flexGrow: 1,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderWidth: 1,
+                    borderColor: LINE,
+                    backgroundColor: FIELD,
+                    borderRadius: 7,
+                    paddingVertical: 10,
+                    paddingHorizontal: 12,
+                  }}
+                >
+                  <Text style={{ color: INK, fontSize: 12.5 }}>
+                    {divergenciaAceita
+                      ? `Seguindo com ${divergencia.lidos} itens`
+                      : "Continuar assim mesmo"}
+                  </Text>
+                </Pressable>
+              </View>
             </View>
           )}
         </View>
@@ -464,15 +576,22 @@ export default function AddScreen({ onSave, onDone }) {
             <Row label="Total a pagar" value={`R$ ${fmtBRL(total)}`} strong />
           </View>
 
+          {podeGuardar === false && !!divergencia && (
+            <Text style={{ fontSize: 11.5, color: RED, marginBottom: -4 }}>
+              Resolva a divergência de itens acima para guardar — ou toque em "Continuar assim
+              mesmo".
+            </Text>
+          )}
+
           <Pressable
             onPress={handleSave}
-            disabled={!manualItems.length || saving}
+            disabled={!podeGuardar || saving}
             style={{
               flexDirection: "row",
               alignItems: "center",
               justifyContent: "center",
               gap: 7,
-              backgroundColor: manualItems.length && !saving ? INK : LINE,
+              backgroundColor: podeGuardar && !saving ? INK : LINE,
               borderRadius: 7,
               paddingVertical: 13,
               marginBottom: 4,
@@ -481,11 +600,11 @@ export default function AddScreen({ onSave, onDone }) {
             {saving ? (
               <ActivityIndicator size="small" color={PAPER} />
             ) : (
-              <Check size={15} color={manualItems.length ? PAPER : INK_SOFT} />
+              <Check size={15} color={podeGuardar ? PAPER : INK_SOFT} />
             )}
             <Text
               style={{
-                color: manualItems.length && !saving ? PAPER : INK_SOFT,
+                color: podeGuardar && !saving ? PAPER : INK_SOFT,
                 fontSize: 14,
                 fontWeight: "700",
               }}

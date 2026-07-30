@@ -581,7 +581,13 @@ function AddTab({ onSave, onDone }) {
       if (!r.items.length) {
         setPdfError("Não consegui reconhecer os itens automaticamente. O texto lido apareceu no campo abaixo — confira e ajuste antes de continuar (ou adicione os itens manualmente).");
       } else if (r.qtdItensEsperada && r.qtdItensEsperada !== r.items.length) {
-        setPdfError(`A nota indica ${r.qtdItensEsperada} itens, mas só reconheci ${r.items.length}. Isso é comum quando o PDF vem de um "Imprimir em PDF" do celular (qualidade mais baixa) — confira o texto lido abaixo e complete os itens que faltarem manualmente.`);
+        // O diagnóstico separa "o OCR não leu o produto" de "leu o produto mas
+        // não o preço" — são problemas diferentes e com correções diferentes.
+        const diagnostico =
+          r.itensDescartados > 0
+            ? `Encontrei ${r.headersEncontrados} produtos no texto, mas em ${r.itensDescartados} deles não consegui ler quantidade/preço.`
+            : `Só encontrei ${r.headersEncontrados} produtos no texto lido — os outros não foram reconhecidos na imagem.`;
+        setPdfError(`A nota indica ${r.qtdItensEsperada} itens, mas só reconheci ${r.items.length}. ${diagnostico} Confira o texto lido abaixo e complete os itens que faltarem manualmente.`);
       }
       setPdfStatus("");
     } catch (err) {
