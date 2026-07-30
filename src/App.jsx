@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { Receipt, Plus, BarChart3, Trash2, ScanLine, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight, Loader2, X, Check, AlertCircle, FileUp, Download } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
 import { exportNotasXlsx, fmtDateBR } from "./exportNotas";
+import ErrorBoundary from "./ErrorBoundary";
 
 const INK = "#241F1A";
 const INK_SOFT = "#6E655A";
@@ -594,17 +595,25 @@ export default function App() {
         )}
 
         {tab === "notas" && (
-          <NotasTab notas={notas} expanded={expanded} setExpanded={setExpanded} onDelete={deleteNota} />
+          <ErrorBoundary key="notas" label="lista de notas">
+            <NotasTab notas={notas} expanded={expanded} setExpanded={setExpanded} onDelete={deleteNota} />
+          </ErrorBoundary>
         )}
-        {tab === "add" && <AddTab onSave={addNota} onDone={() => setTab("notas")} />}
+        {tab === "add" && (
+          <ErrorBoundary key="add" label="adicionar nota">
+            <AddTab onSave={addNota} onDone={() => setTab("notas")} />
+          </ErrorBoundary>
+        )}
         {tab === "analise" && (
-          <AnaliseTab
-            notas={notas}
-            stats={stats}
-            budget={budget}
-            setBudget={saveBudget}
-            budgetDiff={budgetDiff}
-          />
+          <ErrorBoundary key="analise" label="análise">
+            <AnaliseTab
+              notas={notas}
+              stats={stats}
+              budget={budget}
+              setBudget={saveBudget}
+              budgetDiff={budgetDiff}
+            />
+          </ErrorBoundary>
         )}
       </main>
     </div>
@@ -694,7 +703,7 @@ function NotasTab({ notas, expanded, setExpanded, onDelete }) {
                     {n.loja || "Compra"}
                   </p>
                   <p style={{ fontSize: 12, color: INK_SOFT, margin: "3px 0 0" }}>
-                    {fmtDateBR(n.date) || "sem data"} · {(n.items || []).length} itens
+                    <span>{fmtDateBR(n.date) || "sem data"}</span> · <span>{(n.items || []).length} itens</span>
                   </p>
                 </div>
                 <div className="nota-total" style={{ textAlign: "right", flexShrink: 0 }}>
@@ -819,6 +828,16 @@ function AddTab({ onSave, onDone }) {
   const descontoNum = toNumber(desconto);
   const total = Math.max(subtotal - descontoNum, 0);
 
+  const pdfEmAndamento = pdfStatus === "carregando" || pdfStatus === "renderizando" || pdfStatus === "lendo";
+  // Um único texto dentro de um <span> próprio: o React atualiza por textContent
+  // em vez de remover/inserir nós de texto irmãos, que é onde o "removeChild"
+  // estourava quando algo externo (tradutor do navegador, extensão) mexia no DOM.
+  const pdfLabel =
+    pdfStatus === "carregando" ? "Preparando leitor..."
+      : pdfStatus === "renderizando" ? "Abrindo PDF..."
+        : pdfStatus === "lendo" ? `Lendo nota (OCR)... ${Math.round(pdfProgress * 100)}%`
+          : "Escolher PDF da nota";
+
   const handleSave = async () => {
     if (!manualItems.length) return;
     setSaving(true);
@@ -880,15 +899,12 @@ function AddTab({ onSave, onDone }) {
               cursor: pdfStatus && pdfStatus !== "erro" ? "default" : "pointer",
             }}
           >
-            {pdfStatus === "carregando" || pdfStatus === "renderizando" || pdfStatus === "lendo" ? (
+            {pdfEmAndamento ? (
               <Loader2 size={15} className="animate-spin" />
             ) : (
               <FileUp size={15} />
             )}
-            {pdfStatus === "carregando" && "Preparando leitor..."}
-            {pdfStatus === "renderizando" && "Abrindo PDF..."}
-            {pdfStatus === "lendo" && `Lendo nota (OCR)... ${Math.round(pdfProgress * 100)}%`}
-            {(!pdfStatus || pdfStatus === "erro") && "Escolher PDF da nota"}
+            <span>{pdfLabel}</span>
           </label>
           {pdfStatus === "lendo" && (
             <div style={{ marginTop: 10, height: 6, background: PAPER_DARK, borderRadius: 999, overflow: "hidden", maxWidth: 320 }}>

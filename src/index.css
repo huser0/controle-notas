@@ -54,13 +54,15 @@
 
 body {
   margin: 0;
+  /* O app é sempre "papel" claro. Sem isto, o fundo escuro do :root (dark mode)
+     aparece quando o #root está vazio — era a "tela preta" ao dar erro. */
+  background: #f6f1e6;
+  color: #241f1a;
 }
 
 #root {
   max-width: 100%;
   margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
   min-height: 100svh;
   display: flex;
   flex-direction: column;
