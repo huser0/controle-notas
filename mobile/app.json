@@ -17,12 +17,22 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       }
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    },
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "plugins": [
-      "expo-sharing",
       "@react-native-community/datetimepicker"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "644597b9-422d-4ef5-a2fd-8d837e95006c"
+      }
+    },
+    "owner": "hugosergio",
+    "runtimeVersion": "exposdk:54.0.0",
+    "updates": {
+      "url": "https://u.expo.dev/644597b9-422d-4ef5-a2fd-8d837e95006c"
+    }
   }
 }
