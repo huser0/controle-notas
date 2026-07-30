@@ -1,7 +1,8 @@
 import "./storage";
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Receipt, Plus, BarChart3, Trash2, ScanLine, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight, Loader2, X, Check, AlertCircle, FileUp } from "lucide-react";
+import { Receipt, Plus, BarChart3, Trash2, ScanLine, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight, Loader2, X, Check, AlertCircle, FileUp, Download } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
+import { exportNotasXlsx, fmtDateBR } from "./exportNotas";
 
 const INK = "#241F1A";
 const INK_SOFT = "#6E655A";
@@ -623,6 +624,8 @@ function NotasTab({ notas, expanded, setExpanded, onDelete }) {
     });
   }, [notas, search]);
 
+  const handleExport = useCallback(() => exportNotasXlsx(filtered), [filtered]);
+
   if (!notas.length) {
     return (
       <div style={{ textAlign: "center", padding: "50px 16px", color: INK_SOFT }}>
@@ -635,7 +638,7 @@ function NotasTab({ notas, expanded, setExpanded, onDelete }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      <div style={{ position: "relative" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -649,6 +652,28 @@ function NotasTab({ notas, expanded, setExpanded, onDelete }) {
             background: "#FFFDF8",
           }}
         />
+        <button
+          onClick={handleExport}
+          disabled={!filtered.length}
+          className="btn-touch"
+          style={{
+            alignSelf: "flex-end",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            border: `1px solid ${LINE}`,
+            borderRadius: 8,
+            padding: "9px 14px",
+            fontSize: 12.5,
+            background: "#FFFDF8",
+            color: INK,
+            cursor: filtered.length ? "pointer" : "not-allowed",
+            opacity: filtered.length ? 1 : 0.5,
+          }}
+        >
+          <Download size={14} /> Baixar Excel ({filtered.length} {filtered.length === 1 ? "nota" : "notas"})
+        </button>
       </div>
 
       {filtered.length === 0 && (
@@ -669,7 +694,7 @@ function NotasTab({ notas, expanded, setExpanded, onDelete }) {
                     {n.loja || "Compra"}
                   </p>
                   <p style={{ fontSize: 12, color: INK_SOFT, margin: "3px 0 0" }}>
-                    {n.date ? new Date(n.date + "T12:00:00").toLocaleDateString("pt-BR") : "sem data"} · {(n.items || []).length} itens
+                    {fmtDateBR(n.date) || "sem data"} · {(n.items || []).length} itens
                   </p>
                 </div>
                 <div className="nota-total" style={{ textAlign: "right", flexShrink: 0 }}>
