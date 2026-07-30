@@ -5,7 +5,10 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // O app mobile (mobile/) roda em React Native e tem seu próprio toolchain:
+  // este config assume globais de navegador e regras do Vite, que não se aplicam lá.
+  // shared/ fica de fora do ignore de propósito — é código que o app web usa.
+  globalIgnores(['dist', 'mobile']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
