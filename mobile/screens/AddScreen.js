@@ -1,8 +1,12 @@
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { View, Text, TextInput, Pressable, Platform, ActivityIndicator } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { ScanLine, Check, X, Plus, AlertCircle } from "lucide-react-native";
+import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
+import { File } from "expo-file-system";
+import { ScanLine, Check, X, Plus, AlertCircle, FileUp, Camera } from "lucide-react-native";
 import TornCard from "../components/TornCard";
+import OcrWebView from "../components/OcrWebView";
 import { parseReceiptText, extractLoja, toNumber } from "shared/parse";
 import { fmtBRL, fmtDateBR, todayISO } from "shared/format";
 import { INK, INK_SOFT, LINE, RED, GOLD, PAPER, PAPER_DARK, FIELD } from "../theme";
@@ -19,22 +23,106 @@ export default function AddScreen({ onSave, onDone }) {
   const [showPicker, setShowPicker] = useState(false);
   const [parseWarning, setParseWarning] = useState("");
 
-  const handleParse = () => {
-    const r = parseReceiptText(raw);
+  // OCR
+  const ocrRef = useRef(null);
+  const [ocrStatus, setOcrStatus] = useState("");
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrError, setOcrError] = useState("");
+
+  // Miolo comum aos três caminhos de entrada: colar texto, PDF e foto.
+  const applyParsedText = useCallback((text, { fromOcr = false } = {}) => {
+    const r = parseReceiptText(text);
     if (r.date) setDate(r.date);
     setManualItems(r.items);
     setDesconto(r.desconto ? String(r.desconto).replace(".", ",") : "");
-    const lj = extractLoja(raw);
+    const lj = extractLoja(text);
     if (lj) setLoja(lj);
 
     if (!r.items.length) {
-      setParseWarning("Não consegui reconhecer nenhum item nesse texto. Confira o formato ou lance os itens manualmente abaixo.");
+      setParseWarning(
+        fromOcr
+          ? "Não consegui reconhecer os itens automaticamente. O texto lido apareceu no campo abaixo — confira e ajuste, ou lance os itens manualmente."
+          : "Não consegui reconhecer nenhum item nesse texto. Confira o formato ou lance os itens manualmente abaixo."
+      );
     } else if (r.qtdItensEsperada && r.qtdItensEsperada !== r.items.length) {
-      setParseWarning(`A nota indica ${r.qtdItensEsperada} itens, mas reconheci ${r.items.length}. Complete os que faltarem manualmente.`);
+      setParseWarning(
+        `A nota indica ${r.qtdItensEsperada} itens, mas reconheci ${r.items.length}. Complete os que faltarem manualmente.`
+      );
     } else {
       setParseWarning("");
     }
+  }, []);
+
+  const handleParse = () => applyParsedText(raw);
+
+  const ocrBusy =
+    ocrStatus === "carregando" || ocrStatus === "renderizando" || ocrStatus === "lendo";
+
+  const startOcr = (payload) => {
+    setOcrError("");
+    setOcrProgress(0);
+    setOcrStatus("carregando");
+    ocrRef.current?.runOcr(payload);
   };
+
+  const pickPdf = async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: "application/pdf",
+        copyToCacheDirectory: true,
+      });
+      if (res.canceled || !res.assets?.length) return;
+      const base64 = await new File(res.assets[0]).base64();
+      startOcr({ kind: "pdf", base64 });
+    } catch (e) {
+      setOcrError(`Não foi possível abrir o PDF: ${e?.message || e}`);
+      setOcrStatus("");
+    }
+  };
+
+  const takePhoto = async () => {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        setOcrError("Preciso de acesso à câmera para fotografar o cupom.");
+        return;
+      }
+      const res = await ImagePicker.launchCameraAsync({ base64: true, quality: 0.9 });
+      if (res.canceled || !res.assets?.length) return;
+      const asset = res.assets[0];
+      const base64 = asset.base64 || (await new File(asset).base64());
+      startOcr({ kind: "image", base64 });
+    } catch (e) {
+      setOcrError(`Não foi possível usar a câmera: ${e?.message || e}`);
+      setOcrStatus("");
+    }
+  };
+
+  const handleOcrResult = useCallback(
+    (text) => {
+      setRaw(text);
+      applyParsedText(text, { fromOcr: true });
+      setOcrStatus("");
+      setOcrProgress(0);
+    },
+    [applyParsedText]
+  );
+
+  const handleOcrError = useCallback((message) => {
+    setOcrStatus("");
+    setOcrError(
+      `Não foi possível ler a nota. Verifique sua conexão — o leitor de PDF/OCR é baixado da internet na primeira vez. (${message})`
+    );
+  }, []);
+
+  const ocrLabel =
+    ocrStatus === "carregando"
+      ? "Preparando leitor..."
+      : ocrStatus === "renderizando"
+        ? "Abrindo arquivo..."
+        : ocrStatus === "lendo"
+          ? `Lendo nota (OCR)... ${Math.round(ocrProgress * 100)}%`
+          : "";
 
   const removeItem = (i) => setManualItems((arr) => arr.filter((_, idx) => idx !== i));
 
@@ -91,6 +179,107 @@ export default function AddScreen({ onSave, onDone }) {
 
   return (
     <View style={{ gap: 18 }}>
+      <OcrWebView
+        ref={ocrRef}
+        onStatus={(s) => s !== "pronto" && setOcrStatus(s)}
+        onProgress={setOcrProgress}
+        onResult={handleOcrResult}
+        onError={handleOcrError}
+      />
+
+      <TornCard>
+        <View style={{ paddingHorizontal: 15, paddingTop: 16 }}>
+          <Text style={{ fontSize: 16, color: INK, marginBottom: 4, ...theme.DISPLAY_FONT }}>
+            Anexar a nota
+          </Text>
+          <Text style={{ fontSize: 12.5, color: INK_SOFT, marginBottom: 12 }}>
+            Envie o PDF da NFC-e ou fotografe o cupom. A leitura é feita por OCR no próprio
+            aparelho e pode levar alguns segundos — na primeira vez, mais, porque o leitor é
+            baixado da internet.
+          </Text>
+
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Pressable
+              onPress={pickPdf}
+              disabled={ocrBusy}
+              style={{
+                flexGrow: 1,
+                flexBasis: 0,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 7,
+                backgroundColor: ocrBusy ? LINE : INK,
+                borderRadius: 7,
+                paddingVertical: 12,
+              }}
+            >
+              <FileUp size={15} color={ocrBusy ? INK_SOFT : PAPER} />
+              <Text style={{ color: ocrBusy ? INK_SOFT : PAPER, fontSize: 13, fontWeight: "700" }}>
+                PDF
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={takePhoto}
+              disabled={ocrBusy}
+              style={{
+                flexGrow: 1,
+                flexBasis: 0,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 7,
+                borderWidth: 1,
+                borderColor: LINE,
+                backgroundColor: FIELD,
+                borderRadius: 7,
+                paddingVertical: 12,
+                opacity: ocrBusy ? 0.5 : 1,
+              }}
+            >
+              <Camera size={15} color={INK} />
+              <Text style={{ color: INK, fontSize: 13, fontWeight: "700" }}>Fotografar</Text>
+            </Pressable>
+          </View>
+
+          {ocrBusy && (
+            <View style={{ marginTop: 12 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <ActivityIndicator size="small" color={INK} />
+                <Text style={{ fontSize: 12.5, color: INK }}>{ocrLabel}</Text>
+              </View>
+              {ocrStatus === "lendo" && (
+                <View
+                  style={{
+                    marginTop: 10,
+                    height: 6,
+                    backgroundColor: PAPER_DARK,
+                    borderRadius: 999,
+                    overflow: "hidden",
+                  }}
+                >
+                  <View
+                    style={{
+                      width: `${Math.round(ocrProgress * 100)}%`,
+                      height: "100%",
+                      backgroundColor: GOLD,
+                    }}
+                  />
+                </View>
+              )}
+            </View>
+          )}
+
+          {!!ocrError && (
+            <View style={{ flexDirection: "row", gap: 6, marginTop: 10 }}>
+              <AlertCircle size={13} color={RED} style={{ marginTop: 1 }} />
+              <Text style={{ fontSize: 12, color: RED, flexShrink: 1 }}>{ocrError}</Text>
+            </View>
+          )}
+        </View>
+      </TornCard>
+
       <TornCard>
         <View style={{ paddingHorizontal: 15, paddingTop: 16 }}>
           <Text style={{ fontSize: 16, color: INK, marginBottom: 4, ...theme.DISPLAY_FONT }}>
@@ -136,24 +325,6 @@ export default function AddScreen({ onSave, onDone }) {
             </View>
           )}
 
-          <View
-            style={{
-              flexDirection: "row",
-              gap: 6,
-              marginTop: 12,
-              backgroundColor: PAPER_DARK,
-              borderWidth: 1,
-              borderColor: LINE,
-              borderRadius: 6,
-              padding: 10,
-            }}
-          >
-            <AlertCircle size={12} color={GOLD} style={{ marginTop: 2 }} />
-            <Text style={{ fontSize: 11.5, color: INK_SOFT, flexShrink: 1 }}>
-              A leitura de PDF por OCR ainda está só na versão web. Por aqui, cole o texto ou
-              lance os itens manualmente.
-            </Text>
-          </View>
         </View>
       </TornCard>
 

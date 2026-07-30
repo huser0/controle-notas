@@ -34,6 +34,10 @@ async function storageSetWithRetry(key, value, shared, attempts = 3) {
   throw lastErr;
 }
 
+// ATENÇÃO: o bloco de OCR abaixo (loadScriptOnce ... extractTextFromPdf) tem um
+// espelho em mobile/lib/ocrHtml.js, que roda o mesmo pipeline dentro de uma
+// WebView no app mobile. Ajuste feito aqui precisa ser refletido lá. Não dá para
+// compartilhar de fato: aqui é módulo, lá precisa ser texto injetável na página.
 function loadScriptOnce(src) {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) {

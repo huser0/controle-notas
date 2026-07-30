@@ -100,9 +100,31 @@ screens/               NotasScreen, AddScreen, AnaliseScreen
 Os gráficos são desenhados à mão em `react-native-svg`: o recharts do app web é
 baseado em DOM e não roda em RN.
 
-## O que ainda não existe aqui
+## OCR (anexar PDF ou foto)
 
-Leitura de PDF por OCR — o `pdf.js` precisa de canvas e o `tesseract.js` de
-WebAssembly com workers, nada disso disponível no runtime do RN. Por enquanto, a
-aba Adicionar aceita colar o texto da nota ou lançar os itens manualmente; o OCR
-continua só na versão web.
+A aba Adicionar aceita PDF da NFC-e, foto do cupom pela câmera, ou colar o texto.
+
+O `pdf.js` precisa de canvas e o `tesseract.js` de WebAssembly com workers — nada
+disso existe no runtime do React Native. Por isso o pipeline roda dentro de uma
+**WebView invisível** (`components/OcrWebView.js`), que é um navegador de
+verdade. A página está em `lib/ocrHtml.js`.
+
+```
+PDF   -> expo-document-picker -> File.base64() -> WebView: pdf.js -> canvas -> tesseract
+Foto  -> expo-image-picker    -> base64        -> WebView:           canvas -> tesseract
+                                                  -> texto -> parseReceiptText (shared/)
+```
+
+O pré-processamento (escala de cinza + alongamento de contraste) é o mesmo dos
+dois lados. As páginas de PDF são renderizadas em **escala 2** aqui, contra 3 na
+web, para reduzir tempo e risco de estourar memória no aparelho.
+
+> **Duplicação consciente.** Esse pipeline existe também em `src/App.jsx` (app
+> web), como módulo. Não dá para compartilhar: um lado importa, o outro precisa
+> do código como texto injetável na página, e o Metro não converte um no outro.
+> **Ajuste de OCR feito num lado precisa ser espelhado no outro.** O parser
+> (`shared/parse.js`), esse sim, é compartilhado de verdade — é o que garante que
+> web e mobile leiam a mesma nota igual.
+
+Na primeira leitura o tesseract baixa o pacote de idioma português (~15 MB), o
+que exige internet e deixa a primeira execução bem mais lenta.
