@@ -4,10 +4,10 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
-import { ScanLine, Check, X, Plus, AlertCircle, FileUp, Camera, RefreshCw } from "lucide-react-native";
+import { ScanLine, Check, X, Plus, AlertCircle, FileUp, Camera, Tag, RefreshCw } from "lucide-react-native";
 import TornCard from "../components/TornCard";
 import OcrWebView from "../components/OcrWebView";
-import { parseReceiptText, extractLoja, toNumber } from "shared/parse";
+import { parseReceiptText, extractLoja, toNumber, parsePriceTag } from "shared/parse";
 import { PDF_SCALE_ALTA } from "../lib/ocrHtml";
 import { fmtBRL, fmtDateBR, todayISO } from "shared/format";
 import { INK, INK_SOFT, LINE, RED, GOLD, PAPER, PAPER_DARK, FIELD } from "../theme";
@@ -122,11 +122,52 @@ export default function AddScreen({ onSave, onDone }) {
     }
   };
 
+  // Foto de etiqueta de gôndola: preenche o formulário de item manual com um
+  // único produto, para o usuário conferir. Não mexe na lista já lançada.
+  const fotografarEtiqueta = async () => {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        setOcrError("Preciso de acesso à câmera para fotografar a etiqueta.");
+        return;
+      }
+      const res = await ImagePicker.launchCameraAsync({ base64: true, quality: 0.9 });
+      if (res.canceled || !res.assets?.length) return;
+      const asset = res.assets[0];
+      const base64 = asset.base64 || (await new File(asset).base64());
+      startOcr({ kind: "tag", base64 });
+    } catch (e) {
+      setOcrError(`Não foi possível usar a câmera: ${e?.message || e}`);
+      setOcrStatus("");
+    }
+  };
+
   const handleOcrResult = useCallback(
     (text) => {
       setOcrStatus("");
       setOcrProgress(0);
       setOcrPage(null);
+
+      if (ultimaLeitura.current?.kind === "tag") {
+        const tag = parsePriceTag(text);
+        if (!tag.name && !tag.unitPrice) {
+          setOcrError(
+            "Não consegui ler a etiqueta. Tente enquadrar só o cartaz de preço, sem o resto da prateleira."
+          );
+          return;
+        }
+        setNewItem((s) => ({
+          ...s,
+          name: tag.name || s.name,
+          unitPrice: tag.unitPrice ? String(tag.unitPrice).replace(".", ",") : s.unitPrice,
+        }));
+        setOcrError(
+          tag.unitPrice
+            ? ""
+            : "Li o nome mas não achei o preço na etiqueta — complete abaixo antes de adicionar."
+        );
+        return;
+      }
 
       setRaw(text);
       applyParsedText(text, { fromOcr: true });
@@ -279,10 +320,32 @@ export default function AddScreen({ onSave, onDone }) {
               }}
             >
               <Camera size={15} color={INK} />
-              <Text style={{ color: INK, fontSize: 13, fontWeight: "700" }}>Fotografar</Text>
+              <Text style={{ color: INK, fontSize: 13, fontWeight: "700" }}>Cupom</Text>
             </Pressable>
           </View>
 
+          <Pressable
+            onPress={fotografarEtiqueta}
+            disabled={ocrBusy}
+            style={{
+              marginTop: 8,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 7,
+              borderWidth: 1,
+              borderColor: LINE,
+              borderStyle: "dashed",
+              borderRadius: 7,
+              paddingVertical: 11,
+              opacity: ocrBusy ? 0.5 : 1,
+            }}
+          >
+            <Tag size={14} color={INK_SOFT} />
+            <Text style={{ color: INK_SOFT, fontSize: 12.5 }}>
+              Adicionar 1 produto pela etiqueta da prateleira
+            </Text>
+          </Pressable>
 
           {ocrBusy && (
             <View style={{ marginTop: 12 }}>

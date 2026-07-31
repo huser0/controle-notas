@@ -11,7 +11,7 @@
 // ser texto injetável, e o Metro não converte um no outro.
 //
 // Protocolo de mensagens:
-//   RN  -> web:  { kind: "pdf" | "image", base64, scale? }
+//   RN  -> web:  { kind: "pdf" | "image" | "tag", base64, scale? }
 //   web -> RN :  { type: "status", status, page?, pages? }
 //                { type: "progress", progress }    0..1
 //                { type: "result", text }
@@ -28,8 +28,10 @@ export const PDF_SCALE_ALTA = 4;
 
 // Modo de segmentação do Tesseract (PSM). O padrão é 3 (automático), que tende a
 // se atrapalhar com cupom. 4 = coluna única de texto com tamanhos variados,
-// adequado a nota fiscal. Se a precisão piorar, é aqui que se mexe — e só aqui.
+// adequado a nota fiscal; 6 = bloco único e uniforme, melhor para etiqueta.
+// Se a precisão piorar, é aqui que se mexe — e só aqui.
 const PSM_CUPOM = "4";
+const PSM_ETIQUETA = "6";
 
 export const OCR_HTML = `<!doctype html>
 <html lang="pt-BR">
@@ -189,7 +191,10 @@ async function run(payload) {
       text = await ocrPdf(base64ToBytes(payload.base64), payload.scale || ${PDF_SCALE});
     } else {
       send({ type: "status", status: "carregando" });
-      text = await ocrImagem(payload.base64, ${JSON.stringify(PSM_CUPOM)});
+      text = await ocrImagem(
+        payload.base64,
+        payload.kind === "tag" ? ${JSON.stringify(PSM_ETIQUETA)} : ${JSON.stringify(PSM_CUPOM)}
+      );
     }
     send({ type: "result", text: text });
   } catch (e) {

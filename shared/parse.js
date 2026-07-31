@@ -180,6 +180,55 @@ for (let i = 0; i < headers.length; i++) {
   };
 }
 
+// Lê a foto de uma etiqueta de gôndola e devolve { name, unitPrice }.
+//
+// Nada a ver com o parser de cupom acima: aqui o texto é curto, bagunçado e sem
+// estrutura fixa. O resultado é sempre um palpite — a interface tem que jogá-lo
+// no formulário para o usuário conferir, nunca salvar direto.
+const RUIDO_ETIQUETA =
+  /^(oferta|promo[cç][aã]o|promo|leve|pague|validade|val|un|kg|cada|apenas|de|por|r\$|\d+\s*x)\b/i;
+
+export function parsePriceTag(text) {
+  const linhas = String(text || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  // Preço: "R$ X,XX" tem prioridade; sem isso, o primeiro número com 2 decimais.
+  let unitPrice = 0;
+  const comCifrao = String(text || "").match(/R\$\s*([\d.]*\d[.,]\d{2})/i);
+  if (comCifrao) {
+    unitPrice = toNumber(comCifrao[1]);
+  } else {
+    const semCifrao = String(text || "").match(/(?:^|\s)(\d{1,4}[.,]\d{2})(?:\s|$)/);
+    if (semCifrao) unitPrice = toNumber(semCifrao[1]);
+  }
+
+  // Nome: o maior grupo de linhas seguidas que pareçam texto de produto.
+  // Agrupar linhas vizinhas resolve o caso comum do nome quebrado em duas
+  // ("ARROZ TIO JOAO" / "TIPO 1 5KG").
+  const ehNome = (l) => {
+    if (RUIDO_ETIQUETA.test(l)) return false;
+    if (/^[\d\s.,/-]+$/.test(l)) return false; // código de barras, preço solto
+    const letras = (l.match(/[a-zA-ZÀ-ÿ]/g) || []).length;
+    return letras >= 3 && letras >= l.length * 0.5;
+  };
+
+  let melhor = [];
+  let atual = [];
+  for (const l of linhas) {
+    if (ehNome(l)) {
+      atual.push(l);
+    } else {
+      if (atual.join(" ").length > melhor.join(" ").length) melhor = atual;
+      atual = [];
+    }
+  }
+  if (atual.join(" ").length > melhor.join(" ").length) melhor = atual;
+
+  return { name: melhor.join(" ").replace(/\s+/g, " ").trim(), unitPrice };
+}
+
 export function extractLoja(text) {
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   const idx = lines.findIndex((l) => /CNPJ/i.test(l));
